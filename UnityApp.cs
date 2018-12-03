@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using System.Threading;
 using System.Linq;
 using System.Reflection;
+using System.Collections.Generic;
 
 namespace UnityTest
 {
@@ -19,10 +20,9 @@ namespace UnityTest
         const string gameObjectFindRoute = "GameObjectFind";
         const string invokeButtonRoute = "InvokeButton";
         const string invokeInputRoute = "InvokeInput";
-
-        HttpClient client;
-
+        
         private bool IsConnected { get; set; }
+        private UITestClient Client { get; set; }
 
         public readonly IApp App;
         public UnityApp(IApp app, string deviceIp)
@@ -33,10 +33,7 @@ namespace UnityTest
             var url = isTestCloud ? Environment.GetEnvironmentVariable("XTC_APP_ENDPOINT") : "http://" + deviceIp + ":8081";
             Console.WriteLine("Connecting to: {0}", url);
 
-            client = new HttpClient
-            {
-                BaseAddress = new Uri(url),
-            };
+            Client = new UITestClient(url);
 
             Console.WriteLine("Initializing Game Driver");
 
@@ -44,15 +41,9 @@ namespace UnityTest
             app.WaitFor(() => IsConnected, timeoutMessage: "Timeout while connecting to Game Server", timeout: new TimeSpan(0, 5, 0));
         }
 
-        public void ScrollDown()
-        {
-            App.ScrollDown();
-        }
-
         async Task<bool> WaitForOnline()
         {
             Console.WriteLine("Connecting to game server");
-            client.Timeout = new TimeSpan(0, 2, 0);
 
             int count = 0;
             bool success = false;
@@ -65,8 +56,12 @@ namespace UnityTest
                     success = result.Succeeded;
 
                     if (success)
+                    {
                         DeviceInfo = result.Result;
-                    IsConnected = success;
+                        IsConnected = success;
+
+                        return true;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -82,33 +77,26 @@ namespace UnityTest
             return false;
         }
 
-        public void SetLocation(double lat, double lng)
-        {
-            // The application does not have access mock location permission. Add the permission 'android.permission.ACCESS_MOCK_LOCATION' to your manifest
-            // App.Device.SetLocation(lat, lng);
-        }
-
         public void WaitForElement(string name, int timeout = defaultTimeout, string screenshot = "")
         {
             App.WaitFor(() => {
-                var elems = GetAllObjects();
-                return elems.Any(elem => elem.Name == name);
+                return GetGameElements(name).Count() > 0;
             }, retryFrequency: new TimeSpan(0, 0, 0, 0, 800), timeout: new TimeSpan(0, 0, 0, 0, timeout), timeoutMessage: string.Format("Timed out waiting for: {0}", name));
 
             if (!string.IsNullOrEmpty(screenshot))
                 App.Screenshot(screenshot);
         }
 
-        public void WaitForText(string name, string text, int timeout = defaultTimeout, string screenshot = "")
+        public void WaitForInput(string name, string text, int timeout = defaultTimeout, string screenshot = "")
         {
-            WaitForText(
+            WaitForInput(
                 GetGameInputField(name),
                 text,
                 timeout,
                 screenshot);
         }
 
-        public void WaitForText(GameInputField input, string text, int timeout = defaultTimeout, string screenshot = "")
+        public void WaitForInput(GameInputField input, string text, int timeout = defaultTimeout, string screenshot = "")
         {
             App.WaitFor(() => {
                 return input.Text == text;
@@ -127,50 +115,51 @@ namespace UnityTest
                 App.Screenshot(screenshot);
         }
 
-        private async Task<NetworkResponse<DeviceInfo>> GetDeviceInfo()
+        private async Task<UITestClient.NetworkResponse<DeviceInfo>> GetDeviceInfo()
         {
-            return await GetAsync<DeviceInfo>("DeviceInfo");
+            return await Client.GetAsync<DeviceInfo>("DeviceInfo");
         }
 
-        public GameButton GetGameButton(string name = "")
+        public GameButton GetGameButton(string name)
         {
             return GetGameElem<GameButton>(name);
         }
-        public GameButton[] GetGameButtons(string name = "")
+        public GameButton[] GetGameButtons(string name)
         {
             return GetGameElems<GameButton>(name);
         }
 
-        public GameInputField GetGameInputField(string name = "")
+        public GameInputField GetGameInputField(string name)
         {
             return GetGameElem<GameInputField>(name);
         }
-        public GameInputField[] GetGameInputFields(string name = "")
+        public GameInputField[] GetGameInputFields(string name)
         {
             return GetGameElems<GameInputField>(name);
         }
 
-        public GameText GetGameText(string name = "")
+        public GameText GetGameText(string name)
         {
             return GetGameElem<GameText>(name);
         }
-        public GameText[] GetGameTexts(string name = "")
+        public GameText[] GetGameTexts(string name)
         {
             return GetGameElems<GameText>(name);
         }
 
-        public GameImage GetGameImage(string name = "")
+        public GameImage GetGameImage(string name)
         {
             return GetGameElem<GameImage>(name);
         }
-        public GameImage[] GetGameImages(string name = "")
+
+        public GameImage[] GetGameImages(string name)
         {
             return GetGameElems<GameImage>(name);
         }
 
-        private GameElement[] GetAllObjects(string name = "")
+        public GameElement[] GetGameElements(string name)
         {
-            return GetGameElems<GameElement>();
+            return GetGameElems<GameElement>(name);
         }
 
         private T[] GetGameElems<T>(string name = "", int timeout = defaultTimeout) where T : GameElement
@@ -184,13 +173,12 @@ namespace UnityTest
 
             T[] elements = null;
             App.WaitFor(() => {
-                elements = Post<T[]>(gameObjectFindRoute, content);
+                elements = Client.Post<T[]>(gameObjectFindRoute, content);
                 return elements != null;
             }, retryFrequency: TimeSpan.FromMilliseconds(800), timeout: TimeSpan.FromMilliseconds(timeout), timeoutMessage: string.Format("Timed out waiting for: {0} : {1}", name, attrType));
 
             return elements;
         }
-
         private T GetGameElem<T>(string name) where T : GameElement
         {
             return GetGameElems<T>(name).First();
@@ -198,39 +186,95 @@ namespace UnityTest
 
         public string GetCurrentScreen()
         {
-            return Get<string>(currentScreenRoute);
+            return Client.Get<string>(currentScreenRoute);
         }
 
-        public Task<NetworkResponse<string>> GetCurrentScreenAsync()
+        public Task<UITestClient.NetworkResponse<string>> GetCurrentScreenAsync()
         {
-            return GetAsync<string>(currentScreenRoute);
+            return Client.GetAsync<string>(currentScreenRoute);
         }
 
+#region Interaction
         public GameButton InvokeButton(string name, int timeout = defaultTimeout)
         {
             GameButton button = null;
             App.WaitFor(() => {
-                button = Post<GameButton>(invokeButtonRoute, string.Format("?name={0}", name));
+                button = Client.Post<GameButton>(invokeButtonRoute, string.Format("?name={0}", name));
                 return button != null;
             }, retryFrequency: TimeSpan.FromMilliseconds(800), timeout: TimeSpan.FromMilliseconds(timeout), timeoutMessage: string.Format("Timed out waiting for: {0}", name));
 
             return button;
         }
 
-        public GameInputField InvokeText(string name, string text, int timeout = defaultTimeout)
+        public GameInputField InvokeInput(string name, string text, int timeout = defaultTimeout)
         {
             GameInputField input = null;
             App.WaitFor(() => {
-                input = Post<GameInputField>(invokeInputRoute, string.Format("?name={0}&text={1}", name, text));
+                input = Client.Post<GameInputField>(invokeInputRoute, string.Format("?name={0}&text={1}", name, text));
                 return input != null;
             }, retryFrequency: TimeSpan.FromMilliseconds(800), timeout: TimeSpan.FromMilliseconds(timeout), timeoutMessage: string.Format("Timed out waiting for: {0}", name));
 
             return input;
         }
 
-        public void TapBack()
+        public void Tap(string name)
         {
-            TapRelative(0.083f, 0.052f);
+            Tap<GameButton>(name);
+        }
+
+        public void Tap<T>(string name) where T : GameElement
+        {
+            Tap<T>(name);
+        }
+
+        private void Tap<T>(string name, bool doubleTap = false) where T : GameElement
+        {
+            var t = typeof(T);
+            GameElement btn = null;
+
+            if (t == typeof(GameButton))
+            {
+                btn = GetGameButton(name);
+            } else if (t == typeof(GameInputField))
+            {
+                btn = GetGameInputField(name);
+            } else
+            {
+                btn = GetGameElem<GameElement>(name);
+            }
+
+            Tap(btn, doubleTap);
+        }
+
+        public void Tap(GameElement element)
+        {
+            Tap(element);
+        }
+
+        private void Tap(GameElement element, bool doubleTap = false)
+        {
+            if (element == null)
+                throw new Exception("Element not found");
+
+            if (!element.IsActive)
+                throw new Exception("Element is inactive");
+
+            // TODO: Look this up, 0, 0 is 0, 1920 for some reason
+            // float y = DeviceInfo.Height - element.Location.Y;
+
+            float y = (DeviceInfo.Height - element.Location.Y) + element.Rectangle.Height / 3;
+            float x = element.Location.X + (element.Rectangle.Width / 3);
+
+            if (element.GetType() == typeof(GameButton))
+            {
+                y = DeviceInfo.Height - element.Location.Y;
+                x = element.Location.X;
+            }
+
+            if (doubleTap)
+                App.DoubleTapCoordinates(x, y);
+            else
+                App.TapCoordinates(x, y);
         }
 
         public void DelayedTap(string name)
@@ -251,57 +295,6 @@ namespace UnityTest
             Tap(element, true);
         }
 
-        public void Tap(string name)
-        {
-            Tap<GameButton>(name);
-        }
-
-        public void Tap<T>(string name, bool doubleTap = false) where T : GameElement
-        {
-            var t = typeof(T);
-            GameElement btn = null;
-
-            if (t == typeof(GameButton))
-            {
-                btn = GetGameButton(name);
-            } else if (t == typeof(GameInputField))
-            {
-                btn = GetGameInputField(name);
-            } else
-            {
-                btn = GetGameElem<GameElement>(name);
-            }
-
-            Tap(btn, doubleTap);
-        }
-
-        public void Tap(GameElement element, bool doubleTap = false)
-        {
-            if (element == null)
-                throw new Exception("Element not found");
-
-            if (element.IsOnScreen.HasValue)
-                if (!element.IsOnScreen.Value)
-                    throw new Exception("Element is off screen");
-
-            // TODO: Look this up, 0, 0 is 0, 1920 for some reason
-            // float y = DeviceInfo.Height - element.Location.Y;
-
-            float y = (DeviceInfo.Height - element.Location.Y) + element.Rectangle.Height / 3;
-            float x = element.Location.X + (element.Rectangle.Width / 3);
-
-            if (element.GetType() == typeof(GameButton))
-            {
-                y = DeviceInfo.Height - element.Location.Y;
-                x = element.Location.X;
-            }
-
-            if (doubleTap)
-                App.DoubleTapCoordinates(x, y);
-            else
-                App.TapCoordinates(x, y);
-        }
-        
         public void TapRelative(float xpercent, float ypercent)
         {
             if (DeviceInfo == null)
@@ -312,33 +305,54 @@ namespace UnityTest
 
             App.TapCoordinates(xpos, ypos);
         }
-        
+
+        public void TapAbsolute(float x, float y)
+        {
+            if (DeviceInfo == null)
+                throw new Exception("DeviceInfo is null");
+            
+            App.TapCoordinates(x, y);
+        }
+
         public void PhysicalEnterTextAndDismiss(string name, string text)
         {
             var elm = GetGameInputField(name);
-            PhysicalEnterTextAndDismiss(elm, text);
+            App.EnterText(text);
         }
 
-        public void PhysicalEnterTextAndDismiss(string text)
+        public void ScrollUp()
         {
-            TapRelative(0.46f, 0.89f); // For Android P
-            App.EnterText(text);
-            App.TapCoordinates(0, 0);
+            App.ScrollUp();
         }
 
-        public void PhysicalEnterTextAndDismiss(GameElement element, string text)
+        public void ScrollDown()
         {
-            Tap(element);
-            TapRelative(0.46f, 0.89f); // For Android P
+            App.ScrollDown();
+        }
 
-            App.EnterText(text);
+        public void Screenshot(string step)
+        {
+            Console.WriteLine("Screen shotting {0}", step);
+            App.Screenshot(step);
+        }
+#endregion
+    }
 
-            App.TapCoordinates(0, 0);
+    public class UITestClient
+    {
+        private HttpClient Client { get; set; }
+        public UITestClient(string url)
+        {
+            Client = new HttpClient
+            {
+                BaseAddress = new Uri(url),
+                Timeout = new TimeSpan(0, 2, 0)
+            };
         }
 
         public T Get<T>(string path, string content = "")
         {
-            var result = client.GetAsync(path + content).Result;
+            var result = Client.GetAsync(path + content).Result;
             var success = result.IsSuccessStatusCode;
             if (!success)
                 return default(T);
@@ -351,7 +365,7 @@ namespace UnityTest
 
         public T Post<T>(string path, string content)
         {
-            var result = client.PostAsync(path, new StringContent(content)).Result;
+            var result = Client.PostAsync(path, new StringContent(content)).Result;
             var success = result.IsSuccessStatusCode;
             if (!success)
                 return default(T);
@@ -362,7 +376,7 @@ namespace UnityTest
 
         public async Task<T> PostAsync<T>(string path, string content)
         {
-            var result = await client.PostAsync(path, new StringContent(content));
+            var result = await Client.PostAsync(path, new StringContent(content));
             var success = result.IsSuccessStatusCode;
             if (!success)
                 return default(T);
@@ -373,7 +387,7 @@ namespace UnityTest
 
         public async Task<NetworkResponse<T>> GetAsync<T>(string path, string content = "")
         {
-            var result = await client.GetAsync(path + content);
+            var result = await Client.GetAsync(path + content);
             var success = result.IsSuccessStatusCode;
             if (!success)
                 return new NetworkResponse<T>()
@@ -397,16 +411,10 @@ namespace UnityTest
             };
         }
 
-        public void ScreenShot(string step)
+        public class NetworkResponse<T>
         {
-            Console.WriteLine("Screen shotting {0}", step);
-            App.Screenshot(step);
+            public bool Succeeded { get; set; }
+            public T Result { get; set; }
         }
-    }
-
-    public class NetworkResponse<T>
-    {
-        public bool Succeeded { get; set; }
-        public T Result { get; set; }
     }
 }
