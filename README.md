@@ -1,5 +1,5 @@
 # UITest Unity Client
-This test suite abstracts a number of common [Xamarin.UITest](https://docs.microsoft.com/en-us/appcenter/test-cloud/uitest/) functions with an HttpClient in order to interact with the embedded [UITest Unity Server](https://bitbucket.org/agentsofdiscovery/uitestserver). This project targets .NET 4.X standard, and uses NUnit 2.7, because Xamarin.UITest is incompatible with NUnit 3+.
+This test suite abstracts a number of common [Xamarin.UITest](https://docs.microsoft.com/en-us/appcenter/test-cloud/uitest/) functions with an HttpClient in order to interact with the embedded [UITest Unity Server](https://github.com/lkuich/UITestUnity-Server). This project targets .NET 4.X standard, and uses NUnit 2.7, because Xamarin.UITest is incompatible with NUnit 3+.
 
 ## Setup Android Tests
 * Record your test device's local IP address (`DEVICE_IP`)
